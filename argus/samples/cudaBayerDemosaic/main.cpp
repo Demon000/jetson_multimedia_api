@@ -45,7 +45,7 @@ public:
         : CommonOptions(programName,
                         ArgusSamples::CommonOptions::Option_M_SensorMode |
                         ArgusSamples::CommonOptions::Option_R_WindowRect |
-                        ArgusSamples::CommonOptions::Option_F_FrameCount)
+                        ArgusSamples::CommonOptions::Option_T_CaptureTime)
         , m_numStreams(1)
     {
         addOption(createValueOption
@@ -68,7 +68,8 @@ public:
         const SampleOptions& options,
         ICameraProvider *iCameraProvider,
         CameraDevice *cameraDevice);
-    bool capture();
+    bool captureStart();
+    bool captureEnd();
     bool waitForIdle();
 
     void destroy() {
@@ -114,12 +115,6 @@ private:
  * CudaBayerConsumer such that the CUDA consumer will acquire the outputs of capture
  * results as raw Bayer data (which it then demosaics to RGBA for demonstration purposes).
  */
-
-bool executeAfterCamerasInit(const SampleOptions& options,
-                             CudaBayerDemosaicConsumer& cudaConsumer);
-bool executeAfterCamerasFinish(Window& window,
-                               UniqueObj<CameraProvider>& cameraProvider,
-                               CudaBayerDemosaicConsumer& cudaConsumer);
 
 static bool execute(const SampleOptions& options)
 {
@@ -170,17 +165,19 @@ static bool execute(const SampleOptions& options)
     }
 
     // Create the CUDA Bayer consumer and connect it to the RAW16 output stream.
-    CudaBayerDemosaicConsumer cudaConsumer(g_display.get(), streams, sizes,
-                                           options.frameCount());
-    PROPAGATE_ERROR(cudaConsumer.initialize());
-    PROPAGATE_ERROR(cudaConsumer.waitRunning());
+    CudaBayerDemosaicConsumer cudaConsumer(g_display.get(), streams, sizes);
+    PROPAGATE_ERROR(cudaConsumer.threadInitialize());
+    PROPAGATE_ERROR(cudaConsumer.threadExecute());
 
-    // Submit the batch of capture requests.
-    for (unsigned int frame = 0; frame < options.frameCount(); ++frame)
-    {
-        for (auto& captureHolder : captureHolders) {
-            PROPAGATE_ERROR(captureHolder.capture());
-        }
+    for (auto& captureHolder : captureHolders) {
+        PROPAGATE_ERROR(captureHolder.captureStart());
+    }
+
+    // Wait for specified number of seconds.
+    PROPAGATE_ERROR(window.pollingSleep(options.captureTime()));
+
+    for (auto& captureHolder : captureHolders) {
+        PROPAGATE_ERROR(captureHolder.captureEnd());
     }
 
     for (auto& captureHolder : captureHolders) {
@@ -188,7 +185,7 @@ static bool execute(const SampleOptions& options)
     }
 
     // Shutdown the CUDA consumer.
-    PROPAGATE_ERROR(cudaConsumer.shutdown());
+    PROPAGATE_ERROR(cudaConsumer.threadShutdown());
 
     for (auto& captureHolder : captureHolders) {
         captureHolder.destroy();
@@ -260,16 +257,21 @@ bool CaptureHolder::initialize(const SampleOptions& options,
     return true;
 }
 
-bool CaptureHolder::capture()
+bool CaptureHolder::captureStart()
 {
-        Argus::Status status;
-        uint32_t result = iCaptureSession->capture(request, TIMEOUT_INFINITE, &status);
-        if (result == 0)
+        if (iCaptureSession->repeat(request) != STATUS_OK)
         {
-            ORIGINATE_ERROR("Failed to submit capture request (status %x)", status);
+            ORIGINATE_ERROR("Failed to start repeat capture request");
         }
 
         return true;
+}
+
+bool CaptureHolder::captureEnd()
+{
+    iCaptureSession->stopRepeat();
+
+    return true;
 }
 
 bool CaptureHolder::waitForIdle()

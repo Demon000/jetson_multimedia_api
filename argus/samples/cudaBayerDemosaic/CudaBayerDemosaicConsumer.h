@@ -40,20 +40,13 @@ namespace ArgusSamples
 
 static const uint32_t RGBA_BUFFER_COUNT = 10; // Number of buffers to alloc in RGBA stream.
 
-class CudaBayerDemosaicStream
+class CudaBayerDemosaicStream : public Thread
 {
 public:
-    CudaBayerDemosaicStream(EGLDisplay display,
-                            EGLStreamKHR stream,
-                            Argus::Size2D<uint32_t> size)
-    : m_eglDisplay(display)
-    , m_bayerInputStream(stream)
-    , m_bayerSize(size)
-    {
-        // ARGB output size is half of the Bayer size after demosaicing.
-        m_outputSize.width() = m_bayerSize.width() / 2;
-        m_outputSize.height() = m_bayerSize.height() / 2;
-    }
+    explicit CudaBayerDemosaicStream(EGLDisplay display,
+                                     EGLStreamKHR stream,
+                                     Argus::Size2D<uint32_t> size);
+    ~CudaBayerDemosaicStream();
 
     EGLStreamKHR getOutputStream() const
     {
@@ -64,6 +57,10 @@ public:
     {
         return m_bayerInputStream;
     }
+
+    virtual bool threadInitialize() { return true; }
+    virtual bool threadExecute();
+    virtual bool threadShutdown() { return true; }
 
     bool initBeforePreview();
     bool initAfterPreview();
@@ -92,29 +89,25 @@ private:
  * This sample effectively chains two EGLStreams together as follows:
  *   Argus --> [Bayer EGLStream] --> CUDA Demosaic --> [RGBA EGLStream] --> OpenGL
  */
-class CudaBayerDemosaicConsumer : public Thread
+class CudaBayerDemosaicConsumer
 {
 public:
 
     explicit CudaBayerDemosaicConsumer(EGLDisplay display,
                                        std::vector<EGLStreamKHR> streams,
-                                       std::vector<Argus::Size2D<uint32_t>> sizes,
-                                       uint32_t frameCount);
-    explicit CudaBayerDemosaicConsumer();
+                                       std::vector<Argus::Size2D<uint32_t>> sizes);
     ~CudaBayerDemosaicConsumer();
 
-private:
-    /** @name Thread methods */
-    /**@{*/
     virtual bool threadInitialize();
-    virtual bool initPreview();
     virtual bool threadExecute();
     virtual bool threadShutdown();
+
+private:
+    virtual bool initPreview();
     virtual bool shutdownPreview();
-    /**@}*/
 
     EGLDisplay m_eglDisplay;            // EGLDisplay handle.
-    std::vector<CudaBayerDemosaicStream> m_streams;
+    std::vector<CudaBayerDemosaicStream*> m_streams;
     std::vector<EGLStreamKHR> m_rgbaOutputStreams;
     uint32_t m_frameCount;              // Number of frames to process.
 
